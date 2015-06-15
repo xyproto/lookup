@@ -12,7 +12,7 @@ import (
 	"strings"
 )
 
-func jsonpath(js *simplejson.Json, path string) (found *simplejson.Json, restofpath string, mongobongo error) {
+func jsonpath(js *simplejson.Json, path string) (*simplejson.Json, string, error) {
 	if path == "" {
 		// Could not find end node
 		return js, path, errors.New("Could not find a specific node that matched the given path")
