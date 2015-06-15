@@ -1,2 +1,3 @@
 # lookup
-Small utility for looking up a value in a JSON document using a simple path expression
+
+Simple utility for looking up a value in a JSON document using a simple JSON path expression.
