@@ -10,6 +10,10 @@ import (
 	"strings"
 )
 
+var (
+	ErrSpecificNode = errors.New("Could not find a specific node that matched the given path")
+)
+
 // JSONFile represents a JSON file and contains the filename and root node
 type JSONFile struct {
 	filename string
@@ -33,7 +37,7 @@ func NewJSONFile(filename string) (*JSONFile, error) {
 func jsonpath(js *simplejson.Json, JSONpath string) (*simplejson.Json, string, error) {
 	if JSONpath == "" {
 		// Could not find end node
-		return js, JSONpath, errors.New("Could not find a specific node that matched the given path")
+		return js, JSONpath, ErrSpecificNode
 	}
 	firstpart := JSONpath
 	secondpart := ""
@@ -93,9 +97,48 @@ func (jf *JSONFile) LookupString(JSONpath string) (string, error) {
 	return result, nil
 }
 
+func (jf *JSONFile) SetString(JSONpath, value string) error {
+	if !strings.Contains(JSONpath, ".") {
+		return errors.New("JSON path must contain a dot")
+	}
+	pos := strings.LastIndex(JSONpath, ".")
+	firstpart := JSONpath[:pos]
+	lastpart := JSONpath[pos+1:]
+
+	node, _, err := jsonpath(jf.rootnode, firstpart)
+	if (err != nil) && (err != ErrSpecificNode) {
+		return err
+	}
+
+	_, hasNode := node.CheckGet(lastpart)
+
+	if !hasNode {
+		fmt.Println("TODO: Index out of range? Append value.")
+	}
+
+	// It's weird that simplejson Set does not return an error value
+	node.Set(lastpart, value)
+
+	json, err := jf.rootnode.EncodePretty()
+	if err != nil {
+		return err
+	}
+	fmt.Println(string(json))
+
+	return nil
+}
+
+func JSONSet(filename, JSONpath, value string) error {
+	jf, err := NewJSONFile(filename)
+	if err != nil {
+		return err
+	}
+	return jf.SetString(JSONpath, value)
+}
+
 // JSONString will find the string that corresponds to the given JSON Path,
 // given a filename and a simple JSON path expression.
-func JSONString(filename string, JSONpath string) (string, error) {
+func JSONString(filename, JSONpath string) (string, error) {
 	jf, err := NewJSONFile(filename)
 	if err != nil {
 		return "", err
