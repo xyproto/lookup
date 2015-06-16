@@ -2,12 +2,14 @@
 package lookup
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"github.com/bitly/go-simplejson"
 	"io/ioutil"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 var (
@@ -18,6 +20,7 @@ var (
 type JSONFile struct {
 	filename string
 	rootnode *simplejson.Json
+	rw       *sync.RWMutex
 }
 
 // NewJSONFile will read the given filename and return a JSONFile struct
@@ -30,7 +33,8 @@ func NewJSONFile(filename string) (*JSONFile, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &JSONFile{filename, js}, nil
+	rw := &sync.RWMutex{}
+	return &JSONFile{filename, js, rw}, nil
 }
 
 // Recursively look up a given JSON path
@@ -92,18 +96,19 @@ func (jf *JSONFile) LookupString(JSONpath string) (string, error) {
 	result, err := foundnode.String()
 	if err != nil {
 		s := fmt.Sprint(foundnode)
-		return s, errors.New("Result was not a string: " + s)
+		return s, fmt.Errorf("Result was not a string: %v", s)
 	}
 	return result, nil
 }
 
 func (jf *JSONFile) SetString(JSONpath, value string) error {
-	if !strings.Contains(JSONpath, ".") {
-		return errors.New("JSON path must contain a dot")
+	firstpart := ""
+	lastpart := JSONpath
+	if strings.Contains(JSONpath, ".") {
+		pos := strings.LastIndex(JSONpath, ".")
+		firstpart = JSONpath[:pos]
+		lastpart = JSONpath[pos+1:]
 	}
-	pos := strings.LastIndex(JSONpath, ".")
-	firstpart := JSONpath[:pos]
-	lastpart := JSONpath[pos+1:]
 
 	node, _, err := jsonpath(jf.rootnode, firstpart)
 	if (err != nil) && (err != ErrSpecificNode) {
@@ -111,21 +116,78 @@ func (jf *JSONFile) SetString(JSONpath, value string) error {
 	}
 
 	_, hasNode := node.CheckGet(lastpart)
-
 	if !hasNode {
-		fmt.Println("TODO: Index out of range? Append value.")
+		return errors.New("Index out of range? Could not set value.")
 	}
 
 	// It's weird that simplejson Set does not return an error value
 	node.Set(lastpart, value)
 
-	json, err := jf.rootnode.EncodePretty()
+	newdata, err := jf.rootnode.EncodePretty()
 	if err != nil {
 		return err
 	}
-	fmt.Println(string(json))
 
-	return nil
+	return jf.Write(newdata)
+}
+
+func (jf *JSONFile) Write(data []byte) error {
+	jf.rw.Lock()
+	defer jf.rw.Unlock()
+	// TODO: Add newline as well?
+	return ioutil.WriteFile(jf.filename, data, 0666)
+}
+
+func badd(a, b []byte) []byte {
+	var buf bytes.Buffer
+	buf.Write(a)
+	buf.Write(b)
+	return buf.Bytes()
+}
+
+func (jf *JSONFile) AddJSON(JSONpath, JSONdata string) error {
+	firstpart := ""
+	lastpart := JSONpath
+	if strings.Contains(JSONpath, ".") {
+		pos := strings.LastIndex(JSONpath, ".")
+		firstpart = JSONpath[:pos]
+		lastpart = JSONpath[pos+1:]
+	}
+
+	node, _, err := jsonpath(jf.rootnode, firstpart)
+	if (err != nil) && (err != ErrSpecificNode) {
+		return err
+	}
+
+	_, hasNode := node.CheckGet(lastpart)
+	if hasNode {
+		return errors.New("The JSON path should not point to a single key when adding JSON data.")
+	}
+
+	listJSON, err := node.Encode()
+	if err != nil {
+		return err
+	}
+
+	fullJSON, err := jf.rootnode.Encode()
+	if err != nil {
+		return err
+	}
+
+	// TODO: Fork simplejson for a better way of adding data!
+	newFullJSON := bytes.Replace(fullJSON, listJSON, badd(listJSON[:len(listJSON)-1], []byte(","+JSONdata+"]")), 1)
+
+	js, err := simplejson.NewJson(newFullJSON)
+	if err != nil {
+		return err
+	}
+
+	newFullJSON, err = js.EncodePretty()
+	if err != nil {
+		return err
+	}
+
+	return jf.Write(newFullJSON)
 }
 
 func JSONSet(filename, JSONpath, value string) error {
@@ -134,6 +196,14 @@ func JSONSet(filename, JSONpath, value string) error {
 		return err
 	}
 	return jf.SetString(JSONpath, value)
+}
+
+func JSONAdd(filename, JSONpath, JSONdata string) error {
+	jf, err := NewJSONFile(filename)
+	if err != nil {
+		return err
+	}
+	return jf.AddJSON(JSONpath, JSONdata)
 }
 
 // JSONString will find the string that corresponds to the given JSON Path,
